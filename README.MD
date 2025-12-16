@@ -2,6 +2,19 @@
 
 A minimal Node.js Express server that fetches a random image from an Immich album, smart-crops it to the requested aspect ratio, and serves it at [wallpapers.by.vincent.mahn.ke](https://wallpapers.by.vincent.mahn.ke).
 
+## Android setup
+
+1. Download [Automate](https://play.google.com/store/apps/details?id=com.llamalab.automate)
+2. Use the following blocks:
+  <img width="594" height="1300" alt="Image" src="https://github.com/user-attachments/assets/e280d1d2-5afd-4ca6-b4c8-0ba16cd4ceb0" />
+3. Set the delay to your intended duration
+4. Get your screen height and width
+5. Set Request URL to `https://wallpapers.by.vincent.mahn.ke/?height=<height>&width=<height>&token=<height>
+6. Optionally set darken to 0-100 to set the opacity of the image (75 works well)
+7. Set `Save resposne` to `Save to file` and save it into any directory ending in `.png`
+8. Run the flow once to create the file
+9. Set `Wallpaper image set` to the newly created file
+
 ## Configuration
 
 - API base: `https://photos.by.vincent.mahn.ke` (configured in code)
