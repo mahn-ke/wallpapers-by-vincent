@@ -77,6 +77,33 @@ function formatToMime(format) {
   }
 }
 
+// Return YYYY-MM-DD string from either query `date` or Europe/Berlin current date
+function getDateSeedString(dateParam) {
+  if (typeof dateParam === 'string' && dateParam.trim().length) {
+    // Basic normalization; assume YYYY-MM-DD or similar
+    return dateParam.trim();
+  }
+  // Use Europe/Berlin current date
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Berlin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+  // en-CA yields YYYY-MM-DD
+  return parts;
+}
+
+// Simple deterministic hash for strings (djb2 variant)
+function hashStringToInt(str) {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+    hash |= 0; // force 32-bit
+  }
+  return Math.abs(hash);
+}
+
 async function getRandomAssetIdFromAlbum(albumId) {
   // Fetch album details (which include `assets` array)
   const url = `${IMMICH_BASE_URL}/api/albums/${encodeURIComponent(albumId)}`;
@@ -99,9 +126,40 @@ async function getRandomAssetIdFromAlbum(albumId) {
     throw new Error('Album has no assets or response format unexpected');
   }
 
-  const random = assets[Math.floor(Math.random() * assets.length)];
+  // Default random (will be overridden by seeded version in route)
+  const idx = Math.floor(Math.random() * assets.length);
+  const chosen = assets[idx];
   // Immich usually returns `id` for asset identifier.
-  return random.id || random.assetId || random.uuid;
+  return chosen.id || chosen.assetId || chosen.uuid;
+}
+
+// Seeded deterministic selection: picks asset by hashing a date string
+async function getSeededAssetIdFromAlbum(albumId, seedStr) {
+  // Fetch album assets same as above
+  const url = `${IMMICH_BASE_URL}/api/albums/${encodeURIComponent(albumId)}`;
+  const res = await fetch(url, {
+    headers: {
+      'x-api-key': IMMICH_API_KEY,
+      'accept': 'application/json'
+    }
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to fetch album assets: ${res.status} ${res.statusText} - ${text}`);
+  }
+
+  const data = await res.json();
+  const assets = data?.assets || [];
+  if (!assets.length) {
+    throw new Error('Album has no assets or response format unexpected');
+  }
+
+  const seed = seedStr && seedStr.length ? seedStr : 'default-seed';
+  const h = hashStringToInt(seed);
+  const idx = h % assets.length;
+  const chosen = assets[idx];
+  return chosen.id || chosen.assetId || chosen.uuid;
 }
 
 async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
@@ -188,9 +246,10 @@ app.get('/', async (req, res) => {
     const darken = darkenRaw !== undefined ? Number.parseInt(darkenRaw, 10) : undefined;
     // Allow forcing a specific asset via query for testing
     const forcedId = req.query.assetId;
+    const dateSeed = getDateSeedString(req.query.date);
     const assetId = forcedId && typeof forcedId === 'string' && forcedId.length > 10
       ? forcedId
-      : await getRandomAssetIdFromAlbum(IMMICH_ALBUM_ID);
+      : await getSeededAssetIdFromAlbum(IMMICH_ALBUM_ID, dateSeed);
     await cropAssetAndSend(res, assetId, width, height, darken);
   } catch (err) {
     console.error(err);
