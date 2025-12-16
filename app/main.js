@@ -176,6 +176,7 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
 
   // Compare original darkness to `darken`
   const darkenVal = Number.isFinite(darken) ? Math.max(0, Math.min(100, Math.floor(darken))) : null;
+  console.log(`Original darkness: ${originalDarkness}, requested darken: ${darkenVal}`);
   if (darkenVal !== null && originalDarkness < darkenVal) {
     const alpha = (darkenVal - originalDarkness) / 100;
     if (alpha > 0) {
