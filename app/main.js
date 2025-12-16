@@ -104,7 +104,7 @@ async function getRandomAssetIdFromAlbum(albumId) {
   return random.id || random.assetId || random.uuid;
 }
 
-async function cropAssetAndSend(res, assetId, reqW, reqH) {
+async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
   const url = `${IMMICH_BASE_URL}/api/assets/${encodeURIComponent(assetId)}/original`;
   const assetRes = await fetch(url, {
     headers: { 'x-api-key': IMMICH_API_KEY }
@@ -136,12 +136,36 @@ async function cropAssetAndSend(res, assetId, reqW, reqH) {
   const extW = Math.min(imgW - left, Math.floor(top.width));
   const extH = Math.min(imgH - topPx, Math.floor(top.height));
 
-  const outBuffer = await sharp(orientedBuffer)
-    .extract({ left, top: topPx, width: extW, height: extH })
+  // Build the cropped image first
+  const image = sharp(orientedBuffer)
+    .extract({ left, top: topPx, width: extW, height: extH });
+
+  // Optional darken overlay: darken=100 -> 0% opacity, darken=0 -> 100% opacity
+  // Map to alpha in [0,1] as alpha = (100 - darken)/100
+  const darkenVal = Number.isFinite(darken) ? Math.max(0, Math.min(100, Math.floor(darken))) : null;
+  if (darkenVal !== null) {
+    const alpha = (100 - darkenVal) / 100;
+    if (alpha > 0) {
+      image.composite([
+        {
+          input: {
+            create: {
+              width: extW,
+              height: extH,
+              channels: 4,
+              background: { r: 0, g: 0, b: 0, alpha }
+            }
+          }
+        }
+      ]);
+    }
+  }
+
+  const outBuffer = await image
+    .png()
     .toBuffer();
 
-  const outMeta = await sharp(outBuffer).metadata();
-  const mime = formatToMime(outMeta.format || meta.format);
+  const mime = 'image/png';
 
   res.status(200);
   res.setHeader('Content-Type', mime);
@@ -159,12 +183,15 @@ app.get('/', async (req, res) => {
     }
 
     const { width, height } = validateAndParseDims(req.query.width, req.query.height);
+    // Optional darken param: 0..100, where 100 => no overlay, 0 => fully black overlay
+    const darkenRaw = req.query.darken;
+    const darken = darkenRaw !== undefined ? Number.parseInt(darkenRaw, 10) : undefined;
     // Allow forcing a specific asset via query for testing
     const forcedId = req.query.assetId;
     const assetId = forcedId && typeof forcedId === 'string' && forcedId.length > 10
       ? forcedId
       : await getRandomAssetIdFromAlbum(IMMICH_ALBUM_ID);
-    await cropAssetAndSend(res, assetId, width, height);
+    await cropAssetAndSend(res, assetId, width, height, darken);
   } catch (err) {
     console.error(err);
     res.status(500).send('Error fetching random image: ' + err.message);
