@@ -169,11 +169,15 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
   const image = sharp(orientedBuffer)
     .extract({ left, top: topPx, width: extW, height: extH });
 
-  // Optional darken overlay: darken=100 -> 0% opacity, darken=0 -> 100% opacity
-  // Map to alpha in [0,1] as alpha = (100 - darken)/100
+  // Determine how dark the original image is
+  const stats = await image.stats();
+  const avgBrightness = (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
+  const originalDarkness = 100 - Math.round((avgBrightness / 255) * 100);
+
+  // Compare original darkness to `darken`
   const darkenVal = Number.isFinite(darken) ? Math.max(0, Math.min(100, Math.floor(darken))) : null;
-  if (darkenVal !== null) {
-    const alpha = (100 - darkenVal) / 100;
+  if (darkenVal !== null && originalDarkness < darkenVal) {
+    const alpha = (darkenVal - originalDarkness) / 100;
     if (alpha > 0) {
       image.composite([
         {
