@@ -6,7 +6,6 @@ services:
     image: ghcr.io/mahn-ke/wallpapers-by-vincent:latest
     restart: on-failure:5
     environment:
-      - PORT=3010
       - APP_ACCESS_TOKEN=${APP_ACCESS_TOKEN}
       - IMMICH_ALBUM_ID=${IMMICH_ALBUM_ID}
       - IMMICH_API_KEY=${IMMICH_API_KEY}
