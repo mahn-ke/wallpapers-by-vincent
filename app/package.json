@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "NODE_ENV=development node src/server.js"
+    "start": "node main.js"
   },
   "dependencies": {
     "express": "^4.19.2",
