@@ -1,0 +1,6 @@
+{
+    "name": "wallpapers-by-vincent",
+    "scripts": {
+        "start": "node main.js"
+    }
+}
