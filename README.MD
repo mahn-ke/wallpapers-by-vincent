@@ -5,8 +5,8 @@ A minimal Node.js Express server that fetches a random image from an Immich albu
 ## Android setup
 
 1. Download [Automate](https://play.google.com/store/apps/details?id=com.llamalab.automate)
-2. Use the following blocks:
-  <img width="594" height="1300" alt="Image" src="https://github.com/user-attachments/assets/e280d1d2-5afd-4ca6-b4c8-0ba16cd4ceb0" />
+2. Use the following blocks:  
+  <img width="594" height="1300" alt="Image" src="https://github.com/user-attachments/assets/e280d1d2-5afd-4ca6-b4c8-0ba16cd4ceb0" />  
 3. Set the delay to your intended duration
 4. Get your screen height and width
 5. Set Request URL to `https://wallpapers.by.vincent.mahn.ke/?height=<height>&width=<height>&token=<height>
