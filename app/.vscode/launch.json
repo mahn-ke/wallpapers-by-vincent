@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Launch Program",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/src/server.js",
+            "env": {
+                "IMMICH_API_KEY": "uZShI8u35ZsF0d5Soz1nhZXKQEejFoJalO5hFLCCKww",
+                "IMMICH_BASE_URL": "https://photos.by.vincent.mahn.ke",
+                "IMMICH_ALBUM_ID": "21fd456d-153d-4f8c-9454-97451708035b",
+                "APP_ACCESS_TOKEN": "7NVrEpgiMvSdXENRVXgwFhvKisSnw9Ww"
+            }
+        }
+    ]
+}
