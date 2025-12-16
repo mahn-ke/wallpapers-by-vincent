@@ -1,6 +1,16 @@
 {
-    "name": "wallpapers-by-vincent",
-    "scripts": {
-        "start": "node main.js"
-    }
+  "name": "immich-random-album-image-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "NODE_ENV=development node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2",
+    "sharp": "^0.32.6",
+    "smartcrop-sharp": "^2.0.8"
+  }
 }
