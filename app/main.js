@@ -104,35 +104,6 @@ function hashStringToInt(str) {
   return Math.abs(hash);
 }
 
-async function getRandomAssetIdFromAlbum(albumId) {
-  // Fetch album details (which include `assets` array)
-  const url = `${IMMICH_BASE_URL}/api/albums/${encodeURIComponent(albumId)}`;
-  const res = await fetch(url, {
-    headers: {
-      'x-api-key': IMMICH_API_KEY,
-      'accept': 'application/json'
-    }
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to fetch album assets: ${res.status} ${res.statusText} - ${text}`);
-  }
-
-  const data = await res.json();
-  // Album endpoint returns an object with an `assets` array
-  const assets = data?.assets || [];
-  if (!assets.length) {
-    throw new Error('Album has no assets or response format unexpected');
-  }
-
-  // Default random (will be overridden by seeded version in route)
-  const idx = Math.floor(Math.random() * assets.length);
-  const chosen = assets[idx];
-  // Immich usually returns `id` for asset identifier.
-  return chosen.id || chosen.assetId || chosen.uuid;
-}
-
 // Seeded deterministic selection: picks asset by hashing a date string
 async function getSeededAssetIdFromAlbum(albumId, seedStr) {
   // Fetch album assets same as above
