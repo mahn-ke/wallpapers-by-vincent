@@ -7,6 +7,10 @@ services:
     restart: on-failure:5
     environment:
       - PORT=3010
+      - APP_ACCESS_TOKEN=${APP_ACCESS_TOKEN}
+      - IMMICH_ALBUM_ID=${IMMICH_ALBUM_ID}
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - IMMICH_BASE_URL=${IMMICH_BASE_URL}
     ports:
       - "3010:3000"
     healthcheck:
