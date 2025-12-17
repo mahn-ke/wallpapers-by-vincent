@@ -182,8 +182,8 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
     res.send(outBuffer);
   }
 
-  const cropArea = cropW * cropH;
-  const originalArea = imgW * imgH;
+  const cropArea = cropH;
+  const originalArea = imgH;
   const cropRatio = cropArea / originalArea;
 
   if (cropRatio < 0.6) {
