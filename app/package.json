@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^5.0.0",
     "node-fetch": "^3.3.2",
+    "node-vibrant": "^4.0.3",
     "sharp": "^0.32.6",
     "smartcrop-sharp": "^2.0.8"
   }
