@@ -55,28 +55,6 @@ function maxCropForAspect(imgW, imgH, reqW, reqH) {
   return { width: w, height: h };
 }
 
-function formatToMime(format) {
-  switch (format) {
-    case 'jpeg':
-    case 'jpg':
-      return 'image/jpeg';
-    case 'png':
-      return 'image/png';
-    case 'webp':
-      return 'image/webp';
-    case 'gif':
-      return 'image/gif';
-    case 'tiff':
-      return 'image/tiff';
-    case 'heif':
-      return 'image/heif';
-    case 'avif':
-      return 'image/avif';
-    default:
-      return 'application/octet-stream';
-  }
-}
-
 // Return YYYY-MM-DD string from either query `date` or Europe/Berlin current date
 function getDateSeedString(dateParam) {
   if (typeof dateParam === 'string' && dateParam.trim().length) {
@@ -133,6 +111,8 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
   return chosen.id || chosen.assetId || chosen.uuid;
 }
 
+import { Vibrant } from "node-vibrant/node";
+
 async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
   const url = `${IMMICH_BASE_URL}/api/assets/${encodeURIComponent(assetId)}/original`;
   const assetRes = await fetch(url, {
@@ -146,7 +126,6 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
 
   const arrayBuf = await assetRes.arrayBuffer();
   const inputBuffer = Buffer.from(arrayBuf);
-  // Apply EXIF orientation before analyzing/cropping
   const orientedBuffer = await sharp(inputBuffer).rotate().toBuffer();
 
   const meta = await sharp(orientedBuffer).metadata();
@@ -158,61 +137,129 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
 
   const { width: cropW, height: cropH } = maxCropForAspect(imgW, imgH, reqW, reqH);
 
-  const result = await SmartCrop.crop(orientedBuffer, { width: cropW, height: cropH });
-  const top = result.topCrop;
-  const left = Math.max(0, Math.floor(top.x));
-  const topPx = Math.max(0, Math.floor(top.y));
-  const extW = Math.min(imgW - left, Math.floor(top.width));
-  const extH = Math.min(imgH - topPx, Math.floor(top.height));
+  async function cropAndSend(res, orientedBuffer, imgW, imgH, darken) {
+    const result = await SmartCrop.crop(orientedBuffer, { width: cropW, height: cropH });
+    const top = result.topCrop;
+    const left = Math.max(0, Math.floor(top.x));
+    const topPx = Math.max(0, Math.floor(top.y));
+    const extW = Math.min(imgW - left, Math.floor(top.width));
+    const extH = Math.min(imgH - topPx, Math.floor(top.height));
 
-  // Build the cropped image first
-  const image = sharp(orientedBuffer)
-    .extract({ left, top: topPx, width: extW, height: extH });
+    const image = sharp(orientedBuffer)
+      .extract({ left, top: topPx, width: extW, height: extH });
 
-  // Determine how dark the original image is
-  const stats = await image.stats();
-  const avgBrightness = (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
-  const originalDarkness = 100 - Math.round((avgBrightness / 255) * 100);
+    const stats = await image.stats();
+    const avgBrightness = (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
+    const originalDarkness = 100 - Math.round((avgBrightness / 255) * 100);
 
-  // Compare original darkness to `darken`
-  const darkenVal = Number.isFinite(darken) ? Math.max(0, Math.min(100, Math.floor(darken))) : null;
-  console.log(`Original darkness: ${originalDarkness}, requested darken: ${darkenVal}`);
-  if (darkenVal !== null && originalDarkness < darkenVal) {
-    const alpha = (darkenVal - originalDarkness) / 100;
-    if (alpha > 0) {
-      image.composite([
-        {
-          input: {
-            create: {
-              width: extW,
-              height: extH,
-              channels: 4,
-              background: { r: 0, g: 0, b: 0, alpha }
+    const darkenVal = Number.isFinite(darken) ? Math.max(0, Math.min(100, Math.floor(darken))) : null;
+    console.log(`Original darkness: ${originalDarkness}, requested darken: ${darkenVal}`);
+    if (darkenVal !== null && originalDarkness < darkenVal) {
+      const alpha = (darkenVal - originalDarkness) / 100;
+      if (alpha > 0) {
+        image.composite([
+          {
+            input: {
+              create: {
+                width: extW,
+                height: extH,
+                channels: 4,
+                background: { r: 0, g: 0, b: 0, alpha }
+              }
             }
           }
-        }
-      ]);
+        ]);
+      }
     }
+
+    const outBuffer = await image
+      .png()
+      .toBuffer();
+
+    res.status(200);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(outBuffer);
   }
 
-  const outBuffer = await image
-    .png()
-    .toBuffer();
+  const cropArea = cropW * cropH;
+  const originalArea = imgW * imgH;
+  const cropRatio = cropArea / originalArea;
 
-  const mime = 'image/png';
+  if (cropRatio < 0.6) {
+    const topHalf = await sharp(orientedBuffer)
+      .extract({ left: 0, top: 0, width: imgW, height: Math.floor(imgH / 2) });
+    const bottomHalf = await sharp(orientedBuffer)
+      .extract({ left: 0, top: Math.floor(imgH / 2), width: imgW, height: Math.ceil(imgH / 2) });
 
-  res.status(200);
-  res.setHeader('Content-Type', mime);
-  res.setHeader('Cache-Control', 'no-store');
-  res.send(outBuffer);
+    const topColor = await Vibrant.from(await topHalf.png().toBuffer())
+      .getPalette()
+      .then(palette => palette.LightMuted?.hex || '#000000');
+    const bottomColor = await Vibrant.from(await bottomHalf.png().toBuffer())
+      .getPalette()
+      .then(palette => palette.Muted?.hex || '#000000');
+
+    console.log(`Top color: ${topColor}, Bottom color: ${bottomColor}`);
+
+    const gradientBuffer = await sharp({
+      create: {
+      width: cropW,
+      height: cropH,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 }
+      }
+    })
+      .composite([
+      {
+        input: Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${cropW}" height="${cropH}">
+          <linearGradient id="grad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" style="stop-color:${topColor};stop-opacity:1" />
+          <stop offset="100%" style="stop-color:${bottomColor};stop-opacity:1" />
+          </linearGradient>
+          <rect width="100%" height="100%" fill="url(#grad)" />
+        </svg>`
+        ),
+        blend: 'over'
+      }
+      ])
+      .png()
+      .toBuffer();
+
+    const resizedOrientedBuffer = await sharp(orientedBuffer)
+      .resize({ width: cropW, height: cropH, fit: 'inside' })
+      .toBuffer();
+
+    const centeredImage = await sharp({
+      create: {
+        width: cropW,
+        height: cropH,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      }
+    })
+      .composite([
+        { input: gradientBuffer, blend: 'over' },
+        { input: resizedOrientedBuffer, blend: 'over', gravity: 'center' }
+      ])
+      .png()
+      .toBuffer();
+
+    res.status(200);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(centeredImage);
+  } else {
+    await cropAndSend(res, orientedBuffer, imgW, imgH, darken);
+  }
 }
 
 app.get('/', async (req, res) => {
   try {
-    if (!IMMICH_API_KEY || IMMICH_API_KEY === '<PUT_API_KEY_HERE>') {
+    if (!IMMICH_API_KEY) {
       return res.status(500).send('IMMICH_API_KEY not set. Configure in code or via environment.');
     }
-    if (!IMMICH_ALBUM_ID || IMMICH_ALBUM_ID === '<PUT_ALBUM_ID_HERE>') {
+    if (!IMMICH_ALBUM_ID) {
       return res.status(500).send('IMMICH_ALBUM_ID not set. Configure in code or via environment.');
     }
 
