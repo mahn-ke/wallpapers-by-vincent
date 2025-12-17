@@ -7,7 +7,7 @@
     "start": "node main.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^5.0.0",
     "node-fetch": "^3.3.2",
     "sharp": "^0.32.6",
     "smartcrop-sharp": "^2.0.8"
