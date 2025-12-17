@@ -1,6 +1,4 @@
 #http
-version: "3.8"
-
 services:
   app:
     image: ghcr.io/mahn-ke/wallpapers-by-vincent:latest
