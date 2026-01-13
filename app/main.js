@@ -113,7 +113,7 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
 
 import { Vibrant } from "node-vibrant/node";
 
-async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
+async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize) {
   const url = `${IMMICH_BASE_URL}/api/assets/${encodeURIComponent(assetId)}/original`;
   const assetRes = await fetch(url, {
     headers: { 'x-api-key': IMMICH_API_KEY }
@@ -226,9 +226,28 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
       .png()
       .toBuffer();
 
-    const resizedOrientedBuffer = await sharp(orientedBuffer)
-      .resize({ width: cropW, height: cropH, fit: 'inside' })
-      .toBuffer();
+    
+
+    let resizedOrientedBuffer = null;
+    let border = null;
+    if (borderSize > 0) {
+      const aspectRatio = cropW / cropH;
+      border = Math.round(cropH * borderSize);
+
+      resizedOrientedBuffer = await sharp(orientedBuffer)
+        .resize({ width: Math.round(cropW - aspectRatio * border), height: cropH - border, fit: 'inside' })
+        .toBuffer();
+    } else {
+      resizedOrientedBuffer = await sharp(orientedBuffer)
+        .resize({ width: cropW, height: cropH, fit: 'inside' })
+        .toBuffer();
+    }
+
+    let settings = { input: resizedOrientedBuffer, blend: 'over', gravity: 'center' };
+    if (borderSize > 0) {
+      settings = { input: resizedOrientedBuffer, blend: 'over', top: Math.round(border/2), left: Math.floor((cropW - (await sharp(resizedOrientedBuffer).metadata()).width) / 2) };
+    }
+
 
     const centeredImage = await sharp({
       create: {
@@ -240,7 +259,7 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken) {
     })
       .composite([
         { input: gradientBuffer, blend: 'over' },
-        { input: resizedOrientedBuffer, blend: 'over', gravity: 'center' }
+        settings
       ])
       .png()
       .toBuffer();
@@ -273,7 +292,7 @@ app.get('/', async (req, res) => {
     const assetId = forcedId && typeof forcedId === 'string' && forcedId.length > 10
       ? forcedId
       : await getSeededAssetIdFromAlbum(IMMICH_ALBUM_ID, dateSeed);
-    await cropAssetAndSend(res, assetId, width, height, darken);
+    await cropAssetAndSend(res, assetId, width, height, darken, req.query.border);
   } catch (err) {
     console.error(err);
     res.status(500).send('Error fetching random image: ' + err.message);
