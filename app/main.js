@@ -113,7 +113,7 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
 
 import { Vibrant } from "node-vibrant/node";
 
-async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize) {
+async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, topOffset) {
   const url = `${IMMICH_BASE_URL}/api/assets/${encodeURIComponent(assetId)}/original`;
   const assetRes = await fetch(url, {
     headers: { 'x-api-key': IMMICH_API_KEY }
@@ -244,8 +244,9 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize) {
     }
 
     let settings = { input: resizedOrientedBuffer, blend: 'over', gravity: 'center' };
+    const topOffsetParameter = topOffset ? parseInt(topOffset, 10) : 0;
     if (borderSize > 0) {
-      settings = { input: resizedOrientedBuffer, blend: 'over', top: Math.round((border/2)+(border/4)), left: Math.floor((cropW - (await sharp(resizedOrientedBuffer).metadata()).width) / 2) };
+      settings = { input: resizedOrientedBuffer, blend: 'over', top: Math.round((border/2)+(border * topOffsetParameter)), left: Math.floor((cropW - (await sharp(resizedOrientedBuffer).metadata()).width) / 2) };
     }
 
 
@@ -292,7 +293,7 @@ app.get('/', async (req, res) => {
     const assetId = forcedId && typeof forcedId === 'string' && forcedId.length > 10
       ? forcedId
       : await getSeededAssetIdFromAlbum(IMMICH_ALBUM_ID, dateSeed);
-    await cropAssetAndSend(res, assetId, width, height, darken, req.query.border);
+    await cropAssetAndSend(res, assetId, width, height, darken, req.query.border, req.query.topOffset);
   } catch (err) {
     console.error(err);
     res.status(500).send('Error fetching random image: ' + err.message);
