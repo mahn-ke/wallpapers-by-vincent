@@ -245,7 +245,7 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize) {
 
     let settings = { input: resizedOrientedBuffer, blend: 'over', gravity: 'center' };
     if (borderSize > 0) {
-      settings = { input: resizedOrientedBuffer, blend: 'over', top: Math.round(border/2), left: Math.floor((cropW - (await sharp(resizedOrientedBuffer).metadata()).width) / 2) };
+      settings = { input: resizedOrientedBuffer, blend: 'over', top: Math.round((border/2)+(border/4)), left: Math.floor((cropW - (await sharp(resizedOrientedBuffer).metadata()).width) / 2) };
     }
 
 
