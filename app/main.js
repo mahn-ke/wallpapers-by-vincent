@@ -113,7 +113,7 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
 
 import { Vibrant } from "node-vibrant/node";
 
-async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, topOffset) {
+async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, topOffset, sharpen) {
   const url = `${IMMICH_BASE_URL}/api/assets/${encodeURIComponent(assetId)}/original`;
   const assetRes = await fetch(url, {
     headers: { 'x-api-key': IMMICH_API_KEY }
@@ -145,8 +145,13 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, to
     const extW = Math.min(imgW - left, Math.floor(top.width));
     const extH = Math.min(imgH - topPx, Math.floor(top.height));
 
-    const image = sharp(orientedBuffer)
+    let image = sharp(orientedBuffer)
       .extract({ left, top: topPx, width: extW, height: extH });
+
+    if (sharpen > 0) {
+      const extracted = await image.toBuffer();
+      image = sharp(extracted).sharpen({ sigma: 1, m1: sharpen * 4, m2: sharpen * 8 });
+    }
 
     const stats = await image.stats();
     const avgBrightness = (stats.channels[0].mean + stats.channels[1].mean + stats.channels[2].mean) / 3;
@@ -243,6 +248,12 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, to
         .toBuffer();
     }
 
+    if (sharpen > 0) {
+      resizedOrientedBuffer = await sharp(resizedOrientedBuffer)
+        .sharpen({ sigma: 1, m1: sharpen * 4, m2: sharpen * 8 })
+        .toBuffer();
+    }
+
     let settings = { input: resizedOrientedBuffer, blend: 'over', gravity: 'center' };
     const topOffsetParameter = topOffset ? parseFloat(topOffset, 10) : 0;
     if (borderSize > 0) {
@@ -293,7 +304,9 @@ app.get('/', async (req, res) => {
     const assetId = forcedId && typeof forcedId === 'string' && forcedId.length > 10
       ? forcedId
       : await getSeededAssetIdFromAlbum(IMMICH_ALBUM_ID, dateSeed);
-    await cropAssetAndSend(res, assetId, width, height, darken, req.query.border, req.query.topOffset);
+    const sharpenRaw = req.query.sharpen;
+    const sharpen = sharpenRaw !== undefined ? Math.max(0, Math.min(1, parseFloat(sharpenRaw))) : 0;
+    await cropAssetAndSend(res, assetId, width, height, darken, req.query.border, req.query.topOffset, sharpen);
   } catch (err) {
     console.error(err);
     res.status(500).send('Error fetching random image: ' + err.message);
