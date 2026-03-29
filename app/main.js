@@ -20,6 +20,7 @@ import express from 'express';
 import fetch from 'node-fetch';
 import SmartCrop from 'smartcrop-sharp';
 import sharp from 'sharp';
+import { createHash } from 'node:crypto';
 
 const IMMICH_API_KEY = process.env.IMMICH_API_KEY;
 const IMMICH_BASE_URL = process.env.IMMICH_BASE_URL;
@@ -72,14 +73,11 @@ function getDateSeedString(dateParam) {
   return parts;
 }
 
-// Simple deterministic hash for strings (djb2 variant)
-function hashStringToInt(str) {
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) + str.charCodeAt(i);
-    hash |= 0; // force 32-bit
-  }
-  return Math.abs(hash);
+// Deterministic, well-distributed seeded index to avoid sequential-looking picks.
+function seededIndex(seed, length) {
+  const digest = createHash('sha256').update(seed).digest();
+  const value = digest.readUInt32BE(0);
+  return value % length;
 }
 
 // Seeded deterministic selection: picks asset by hashing a date string
@@ -105,8 +103,7 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
   }
 
   const seed = seedStr && seedStr.length ? seedStr : 'default-seed';
-  const h = hashStringToInt(seed);
-  const idx = h % assets.length;
+  const idx = seededIndex(`${albumId}:${seed}`, assets.length);
   const chosen = assets[idx];
   return chosen.id || chosen.assetId || chosen.uuid;
 }
