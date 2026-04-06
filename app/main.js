@@ -30,6 +30,10 @@ const PORT = process.env.PORT || 3000;
 
 const app = express();
 
+const DAILY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const DAILY_CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+const imageCacheByDate = new Map();
+
 app.use(enforceToken);
 
 function validateAndParseDims(qw, qh) {
@@ -80,6 +84,50 @@ function seededIndex(seed, length) {
   return value % length;
 }
 
+function normalizedQueryValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item));
+  }
+  if (value === undefined || value === null) {
+    return '';
+  }
+  return String(value);
+}
+
+function buildRestQueryHash(query) {
+  const keys = Object.keys(query || {})
+    .filter((key) => key !== 'date')
+    .sort((a, b) => a.localeCompare(b));
+
+  const canonical = keys.map((key) => [key, normalizedQueryValue(query[key])]);
+  const serialized = JSON.stringify(canonical);
+  return createHash('sha256').update(serialized).digest('hex');
+}
+
+function getOrCreateDateCache(dateKey) {
+  const existing = imageCacheByDate.get(dateKey);
+  if (existing) {
+    return existing;
+  }
+
+  const created = { createdAt: Date.now(), images: new Map() };
+  imageCacheByDate.set(dateKey, created);
+  return created;
+}
+
+function clearExpiredDailyCaches() {
+  const now = Date.now();
+  for (const [dateKey, bucket] of imageCacheByDate.entries()) {
+    if (now - bucket.createdAt < DAILY_CACHE_TTL_MS) {
+      continue;
+    }
+    console.log(`Clearing cache for date ${dateKey} with ${bucket.images.size} images`);
+    imageCacheByDate.delete(dateKey);
+  }
+}
+
+setInterval(clearExpiredDailyCaches, DAILY_CACHE_CLEANUP_INTERVAL_MS).unref();
+
 // Seeded deterministic selection: picks asset by hashing a date string
 async function getSeededAssetIdFromAlbum(albumId, seedStr) {
   // Fetch album assets same as above
@@ -110,7 +158,7 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
 
 import { Vibrant } from "node-vibrant/node";
 
-async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, topOffset, sharpen) {
+async function cropAssetToBuffer(assetId, reqW, reqH, darken, borderSize, topOffset, sharpen) {
   const url = `${IMMICH_BASE_URL}/api/assets/${encodeURIComponent(assetId)}/original`;
   const assetRes = await fetch(url, {
     headers: { 'x-api-key': IMMICH_API_KEY }
@@ -134,7 +182,7 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, to
 
   const { width: cropW, height: cropH } = maxCropForAspect(imgW, imgH, reqW, reqH);
 
-  async function cropAndSend(res, orientedBuffer, imgW, imgH, darken) {
+  async function cropToBuffer(orientedBuffer, imgW, imgH, darken) {
     const result = await SmartCrop.crop(orientedBuffer, { width: cropW, height: cropH });
     const top = result.topCrop;
     const left = Math.max(0, Math.floor(top.x));
@@ -174,14 +222,9 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, to
       }
     }
 
-    const outBuffer = await image
+    return image
       .png()
       .toBuffer();
-
-    res.status(200);
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-store');
-    res.send(outBuffer);
   }
 
   const cropArea = cropH;
@@ -273,12 +316,9 @@ async function cropAssetAndSend(res, assetId, reqW, reqH, darken, borderSize, to
       .png()
       .toBuffer();
 
-    res.status(200);
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-store');
-    res.send(centeredImage);
+    return centeredImage;
   } else {
-    await cropAndSend(res, orientedBuffer, imgW, imgH, darken);
+    return cropToBuffer(orientedBuffer, imgW, imgH, darken);
   }
 }
 
@@ -291,19 +331,37 @@ app.get('/', async (req, res) => {
       return res.status(500).send('IMMICH_ALBUM_ID not set. Configure in code or via environment.');
     }
 
+    const dateSeed = getDateSeedString(req.query.date);
+    const restQueryHash = buildRestQueryHash(req.query);
+    const dateBucket = getOrCreateDateCache(dateSeed);
+    const cachedImage = dateBucket.images.get(restQueryHash);
+
+    if (cachedImage) {
+      res.status(200);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.send(cachedImage);
+    }
+
     const { width, height } = validateAndParseDims(req.query.width, req.query.height);
     // Optional darken param: 0..100, where 100 => no overlay, 0 => fully black overlay
     const darkenRaw = req.query.darken;
     const darken = darkenRaw !== undefined ? Number.parseInt(darkenRaw, 10) : undefined;
     // Allow forcing a specific asset via query for testing
     const forcedId = req.query.assetId;
-    const dateSeed = getDateSeedString(req.query.date);
     const assetId = forcedId && typeof forcedId === 'string' && forcedId.length > 10
       ? forcedId
       : await getSeededAssetIdFromAlbum(IMMICH_ALBUM_ID, dateSeed);
     const sharpenRaw = req.query.sharpen;
     const sharpen = sharpenRaw !== undefined ? Math.max(0, Math.min(1, parseFloat(sharpenRaw))) : 0;
-    await cropAssetAndSend(res, assetId, width, height, darken, req.query.border, req.query.topOffset, sharpen);
+
+    const imageBuffer = await cropAssetToBuffer(assetId, width, height, darken, req.query.border, req.query.topOffset, sharpen);
+    dateBucket.images.set(restQueryHash, imageBuffer);
+
+    res.status(200);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.send(imageBuffer);
   } catch (err) {
     console.error(err);
     res.status(500).send('Error fetching random image: ' + err.message);
