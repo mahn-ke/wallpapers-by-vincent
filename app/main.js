@@ -33,6 +33,7 @@ const app = express();
 const DAILY_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DAILY_CACHE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 const imageCacheByDate = new Map();
+const BERLIN_TIME_ZONE = 'Europe/Berlin';
 
 app.use(enforceToken);
 
@@ -68,7 +69,7 @@ function getDateSeedString(dateParam) {
   }
   // Use Europe/Berlin current date
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Berlin',
+    timeZone: BERLIN_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit'
@@ -113,6 +114,102 @@ function getOrCreateDateCache(dateKey) {
   const created = { createdAt: Date.now(), images: new Map() };
   imageCacheByDate.set(dateKey, created);
   return created;
+}
+
+function parseGmtOffsetToMs(gmtOffset) {
+  const normalized = String(gmtOffset || '').trim();
+  const match = normalized.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/i);
+  if (!match) {
+    throw new Error(`Unexpected time zone offset format: ${normalized}`);
+  }
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number.parseInt(match[2], 10);
+  const minutes = Number.parseInt(match[3] || '0', 10);
+  return sign * ((hours * 60) + minutes) * 60 * 1000;
+}
+
+function getTimeZoneOffsetMs(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+
+  const tzPart = parts.find((part) => part.type === 'timeZoneName');
+  if (!tzPart) {
+    throw new Error(`Unable to resolve time zone offset for ${timeZone}`);
+  }
+
+  return parseGmtOffsetToMs(tzPart.value);
+}
+
+function zonedDateTimeToUtcMs(year, month, day, hour, minute, second, millisecond, timeZone) {
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  const offset1 = getTimeZoneOffsetMs(new Date(utcGuess), timeZone);
+  const adjusted = utcGuess - offset1;
+  const offset2 = getTimeZoneOffsetMs(new Date(adjusted), timeZone);
+
+  if (offset1 === offset2) {
+    return adjusted;
+  }
+
+  return utcGuess - offset2;
+}
+
+function getDatePartsInTimeZone(date, timeZone) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(date);
+
+  const year = Number.parseInt(parts.find((part) => part.type === 'year')?.value || '', 10);
+  const month = Number.parseInt(parts.find((part) => part.type === 'month')?.value || '', 10);
+  const day = Number.parseInt(parts.find((part) => part.type === 'day')?.value || '', 10);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    throw new Error(`Unable to resolve date parts in timezone ${timeZone}`);
+  }
+
+  return { year, month, day };
+}
+
+function getMsUntilNextBerlinMidnight(now = new Date()) {
+  const berlinToday = getDatePartsInTimeZone(now, BERLIN_TIME_ZONE);
+  const utcForTomorrowDate = new Date(Date.UTC(berlinToday.year, berlinToday.month - 1, berlinToday.day) + DAILY_CACHE_TTL_MS);
+  const tomorrowYear = utcForTomorrowDate.getUTCFullYear();
+  const tomorrowMonth = utcForTomorrowDate.getUTCMonth() + 1;
+  const tomorrowDay = utcForTomorrowDate.getUTCDate();
+
+  const nextMidnightUtcMs = zonedDateTimeToUtcMs(
+    tomorrowYear,
+    tomorrowMonth,
+    tomorrowDay,
+    0,
+    0,
+    0,
+    0,
+    BERLIN_TIME_ZONE
+  );
+
+  return Math.max(0, nextMidnightUtcMs - now.getTime());
+}
+
+function setResponseCacheHeaders(res, ttlMs, etag) {
+  const ttlSeconds = Math.max(0, Math.floor(ttlMs / 1000));
+  const expiresAt = new Date(Date.now() + (ttlSeconds * 1000));
+
+  res.setHeader('Cache-Control', `public, max-age=${ttlSeconds}, s-maxage=${ttlSeconds}, must-revalidate`);
+  res.setHeader('Expires', expiresAt.toUTCString());
+  res.setHeader('ETag', etag);
 }
 
 function clearExpiredDailyCaches() {
@@ -334,13 +431,18 @@ app.get('/', async (req, res) => {
     const dateSeed = getDateSeedString(req.query.date);
     const restQueryHash = buildRestQueryHash(req.query);
     const dateBucket = getOrCreateDateCache(dateSeed);
+    const cacheTtlMs = getMsUntilNextBerlinMidnight();
     const cachedImage = dateBucket.images.get(restQueryHash);
 
     if (cachedImage) {
+      setResponseCacheHeaders(res, cacheTtlMs, cachedImage.etag);
+      if (req.headers['if-none-match'] === cachedImage.etag) {
+        return res.status(304).end();
+      }
+
       res.status(200);
       res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Cache-Control', 'no-store');
-      return res.send(cachedImage);
+      return res.send(cachedImage.buffer);
     }
 
     const { width, height } = validateAndParseDims(req.query.width, req.query.height);
@@ -356,11 +458,16 @@ app.get('/', async (req, res) => {
     const sharpen = sharpenRaw !== undefined ? Math.max(0, Math.min(1, parseFloat(sharpenRaw))) : 0;
 
     const imageBuffer = await cropAssetToBuffer(assetId, width, height, darken, req.query.border, req.query.topOffset, sharpen);
-    dateBucket.images.set(restQueryHash, imageBuffer);
+    const imageEtag = `"${createHash('sha256').update(imageBuffer).digest('hex')}"`;
+    dateBucket.images.set(restQueryHash, { buffer: imageBuffer, etag: imageEtag });
+
+    setResponseCacheHeaders(res, cacheTtlMs, imageEtag);
+    if (req.headers['if-none-match'] === imageEtag) {
+      return res.status(304).end();
+    }
 
     res.status(200);
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'no-store');
     return res.send(imageBuffer);
   } catch (err) {
     console.error(err);
