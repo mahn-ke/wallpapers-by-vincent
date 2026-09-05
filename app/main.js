@@ -21,6 +21,7 @@ import fetch from 'node-fetch';
 import SmartCrop from 'smartcrop-sharp';
 import sharp from 'sharp';
 import { createHash } from 'node:crypto';
+import { selectImageForDate } from './utils/imageSelector.js';
 
 const IMMICH_API_KEY = process.env.IMMICH_API_KEY;
 const IMMICH_BASE_URL = process.env.IMMICH_BASE_URL;
@@ -76,13 +77,6 @@ function getDateSeedString(dateParam) {
   }).format(new Date());
   // en-CA yields YYYY-MM-DD
   return parts;
-}
-
-// Deterministic, well-distributed seeded index to avoid sequential-looking picks.
-function seededIndex(seed, length) {
-  const digest = createHash('sha256').update(seed).digest();
-  const value = digest.readUInt32BE(0);
-  return value % length;
 }
 
 function normalizedQueryValue(value) {
@@ -225,9 +219,9 @@ function clearExpiredDailyCaches() {
 
 setInterval(clearExpiredDailyCaches, DAILY_CACHE_CLEANUP_INTERVAL_MS).unref();
 
-// Seeded deterministic selection: picks asset by hashing a date string
+// Select only assets that existed on the requested date so later additions do
+// not change the image already assigned to earlier dates.
 async function getSeededAssetIdFromAlbum(albumId, seedStr) {
-  // Fetch album assets same as above
   const url = `${IMMICH_BASE_URL}/api/albums/${encodeURIComponent(albumId)}`;
   const res = await fetch(url, {
     headers: {
@@ -247,9 +241,10 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
     throw new Error('Album has no assets or response format unexpected');
   }
 
-  const seed = seedStr && seedStr.length ? seedStr : 'default-seed';
-  const idx = seededIndex(`${albumId}:${seed}`, assets.length);
-  const chosen = assets[idx];
+  const chosen = selectImageForDate(assets, seedStr);
+  if (!chosen) {
+    throw new Error(`Album has no assets available on ${seedStr}`);
+  }
   return chosen.id || chosen.assetId || chosen.uuid;
 }
 
