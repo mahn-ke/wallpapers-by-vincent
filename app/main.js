@@ -18,7 +18,7 @@ function enforceToken(req, res, next) {
 
 import express from 'express';
 import fetch from 'node-fetch';
-import SmartCrop from 'smartcrop-sharp';
+import SmartCrop from './utils/smartcrop.js';
 import sharp from 'sharp';
 import { createHash } from 'node:crypto';
 import { selectImageForDate } from './utils/imageSelector.js';
