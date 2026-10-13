@@ -29,11 +29,14 @@ A minimal Node.js Express server that fetches a random image from an Immich albu
 
 Minimum required permissions for the API key:
 - album:read – to list assets in the album
+- asset:read – to search album assets on Immich v3 and newer
 - asset:download – to fetch the image (original/thumbnail)
 
 Create a read-only key in Immich with these scopes.
 
 ## Install & Run
+
+Run these commands from the `app` directory:
 
 ```bash
 npm install
@@ -51,6 +54,12 @@ npm run start
 ```
 
 Then open: http://localhost:3000/?width=800&height=600&token=<optional_token>
+
+For a 16:9 wallpaper, use `width=1920&height=1080`. Omit `date` for
+today in Europe/Berlin, or supply a date such as `date=2026-10-13`.
+The album is configured through `IMMICH_ALBUM_ID`, not a query parameter.
+Older Immich versions return assets in the album response; newer versions
+use paginated metadata search, which requires the additional `asset:read` scope.
 
 ## Usage
 

@@ -22,6 +22,7 @@ import SmartCrop from './utils/smartcrop.js';
 import sharp from 'sharp';
 import { createHash } from 'node:crypto';
 import { selectImageForDate } from './utils/imageSelector.js';
+import { fetchAlbumAssets } from './utils/immichAlbum.js';
 
 const IMMICH_API_KEY = process.env.IMMICH_API_KEY;
 const IMMICH_BASE_URL = process.env.IMMICH_BASE_URL;
@@ -222,21 +223,11 @@ setInterval(clearExpiredDailyCaches, DAILY_CACHE_CLEANUP_INTERVAL_MS).unref();
 // Select only assets that existed on the requested date so later additions do
 // not change the image already assigned to earlier dates.
 async function getSeededAssetIdFromAlbum(albumId, seedStr) {
-  const url = `${IMMICH_BASE_URL}/api/albums/${encodeURIComponent(albumId)}`;
-  const res = await fetch(url, {
-    headers: {
-      'x-api-key': IMMICH_API_KEY,
-      'accept': 'application/json'
-    }
+  const assets = await fetchAlbumAssets({
+    baseUrl: IMMICH_BASE_URL,
+    apiKey: IMMICH_API_KEY,
+    albumId
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Failed to fetch album assets: ${res.status} ${res.statusText} - ${text}`);
-  }
-
-  const data = await res.json();
-  const assets = data?.assets || [];
   if (!assets.length) {
     throw new Error('Album has no assets or response format unexpected');
   }
