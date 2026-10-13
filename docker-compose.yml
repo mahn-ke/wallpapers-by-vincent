@@ -1,7 +1,7 @@
 #http
 services:
   app:
-    image: ghcr.io/mahn-ke/wallpapers-by-vincent:latest@sha256:f1bda86dc5257c6d4d07b37428e4d347e1dd875a7e1abcda5a967dd48aae6c14
+    image: ghcr.io/mahn-ke/wallpapers-by-vincent:latest@sha256:91bfbdb09b2da87a66d6321fc89688779871701a9e5fa94806e12aef9546a236
     restart: on-failure:5
     environment:
       - APP_ACCESS_TOKEN=${APP_ACCESS_TOKEN}
