@@ -120,4 +120,119 @@ test('new batches are introduced once before joining the cumulative cycle', () =
   assert.ok(cumulativeCycle.some((id) => id.startsWith('jan1_')));
   assert.ok(cumulativeCycle.some((id) => id.startsWith('jan5_')));
   assert.ok(cumulativeCycle.some((id) => id.startsWith('feb2_')));
+
+  const nextCycle = selectIds(2, 22, 25);
+  assert.equal(new Set(nextCycle).size, 25);
+  assert.notDeepEqual(nextCycle, cumulativeCycle);
+  for (let index = 2; index < nextCycle.length; index += 1) {
+    const batch = nextCycle[index].split('_')[0];
+    assert.ok(!(batch === nextCycle[index - 1].split('_')[0] &&
+      batch === nextCycle[index - 2].split('_')[0]));
+  }
+});
+
+test('batch introductions use a constrained deterministic shuffle', () => {
+  const batch = Array.from({ length: 5 }, (_, index) =>
+    image(`jan5_${index}`, '2025-01-05T00:00:00Z')
+  );
+  const images = Array.from({ length: 10 }, (_, index) =>
+    image(`jan1_${index}`, '2025-01-01T00:00:00Z')
+  ).concat(batch);
+  const introduction = Array.from({ length: 5 }, (_, index) =>
+    selectImageForDate(images, `2025-01-${String(11 + index).padStart(2, '0')}`)
+  );
+
+  assert.deepEqual(introduction.map(({ id }) => id), [
+    'jan5_1', 'jan5_4', 'jan5_2', 'jan5_3', 'jan5_0'
+  ]);
+  assert.deepEqual(
+    introduction.map(({ id }) => id),
+    Array.from({ length: 5 }, (_, index) =>
+      selectImageForDate([...images].reverse(), `2025-01-${String(11 + index).padStart(2, '0')}`).id
+    )
+  );
+
+  const sourceRanks = new Map(batch.map(({ id }, index) => [id, index]));
+  for (let index = 2; index < introduction.length; index += 1) {
+    const first = sourceRanks.get(introduction[index - 2].id);
+    const second = sourceRanks.get(introduction[index - 1].id);
+    const third = sourceRanks.get(introduction[index].id);
+    assert.notDeepEqual([second - first, third - second], [1, 1]);
+    assert.notDeepEqual([second - first, third - second], [-1, -1]);
+  }
+});
+
+test('single-batch cumulative cycles retain the source-order run constraint', () => {
+  const images = Array.from({ length: 5 }, (_, index) =>
+    image(`single_${index}`, '2025-01-01T00:00:00Z')
+  );
+  const sourceRanks = new Map(images.map(({ id }, index) => [id, index]));
+  const getCycle = (startDay) => Array.from({ length: 5 }, (_, offset) =>
+    selectImageForDate(images, new Date(Date.UTC(2025, 0, startDay + offset)).toISOString()).id
+  );
+  const firstCycle = getCycle(6);
+  const secondCycle = getCycle(11);
+
+  for (const cycle of [firstCycle, secondCycle]) {
+    assert.equal(new Set(cycle).size, 5);
+    for (let index = 2; index < cycle.length; index += 1) {
+      const first = sourceRanks.get(cycle[index - 2]);
+      const second = sourceRanks.get(cycle[index - 1]);
+      const third = sourceRanks.get(cycle[index]);
+      assert.notDeepEqual([second - first, third - second], [1, 1]);
+      assert.notDeepEqual([second - first, third - second], [-1, -1]);
+    }
+  }
+  assert.notDeepEqual(firstCycle, secondCycle);
+});
+
+test('cumulative cycles mix batches with no run longer than two when feasible', () => {
+  const batch1 = Array.from({ length: 10 }, (_, index) =>
+    image(`jan1_${index}`, '2025-01-01T00:00:00Z')
+  );
+  const batch2 = Array.from({ length: 5 }, (_, index) =>
+    image(`jan5_${index}`, '2025-01-05T00:00:00Z')
+  );
+  const batch3 = Array.from({ length: 10 }, (_, index) =>
+    image(`feb2_${index}`, '2025-02-02T00:00:00Z')
+  );
+  const images = [...batch1, ...batch2, ...batch3];
+  const selected = Array.from({ length: 25 }, (_, offset) =>
+    selectImageForDate(images, new Date(Date.UTC(2025, 1, 25 + offset)).toISOString())
+  );
+  const selectedIds = selected.map(({ id }) => id);
+  const batches = selected.map(({ id }) => id.split('_')[0]);
+
+  assert.equal(new Set(selectedIds).size, 25);
+  for (let index = 2; index < batches.length; index += 1) {
+    assert.ok(!(batches[index] === batches[index - 1] && batches[index] === batches[index - 2]));
+  }
+  assert.deepEqual(
+    selectedIds,
+    Array.from({ length: 25 }, (_, offset) =>
+      selectImageForDate(images, new Date(Date.UTC(2025, 1, 25 + offset)).toISOString()).id
+    )
+  );
+});
+
+test('cumulative run limit relaxes only as much as a dominant batch requires', () => {
+  const batch1 = Array.from({ length: 5 }, (_, index) =>
+    image(`large_${index}`, '2025-01-01T00:00:00Z')
+  );
+  const batch2 = [image('small_0', '2025-01-02T00:00:00Z')];
+  const images = [...batch1, ...batch2];
+  const cycle = Array.from({ length: 6 }, (_, offset) =>
+    selectImageForDate(images, new Date(Date.UTC(2025, 0, 7 + offset)).toISOString())
+  );
+  const ids = cycle.map(({ id }) => id);
+  const batches = cycle.map(({ id }) => id.split('_')[0]);
+
+  assert.equal(new Set(ids).size, 6);
+  let longestRun = 1;
+  let currentRun = 1;
+  for (let index = 1; index < batches.length; index += 1) {
+    currentRun = batches[index] === batches[index - 1] ? currentRun + 1 : 1;
+    longestRun = Math.max(longestRun, currentRun);
+  }
+  assert.equal(longestRun, 3);
 });

@@ -66,6 +66,7 @@ use paginated metadata search, which requires the additional `asset:read` scope.
 - Required query params: `width` and `height` (positive integers).
 - The server calculates the aspect ratio `width:height`, determines the largest possible crop within the image that respects this ratio, and uses `smartcrop` to pick the best region.
 - The output is the cropped image (no upscaling; it never exceeds the original dimensions).
+- Images are introduced in deterministic, shuffled creation-date batches. After each introduction, the cumulative pool is shuffled again for each full cycle. Introductions and individual batch portions of a cycle avoid three consecutive assets in source-ID order; mixed cycles avoid runs longer than two assets from the same batch when the batch sizes allow it. If batch sizes make that impossible, the selector uses the smallest feasible maximum run.
 
 Examples:
 
