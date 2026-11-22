@@ -21,12 +21,26 @@ import fetch from 'node-fetch';
 import SmartCrop from './utils/smartcrop.js';
 import sharp from 'sharp';
 import { createHash } from 'node:crypto';
-import { selectImageForDate } from './utils/imageSelector.js';
+import { selectImageForDate, selectWorkdayImageForDate } from './utils/imageSelector.js';
 import { fetchAlbumAssets } from './utils/immichAlbum.js';
 
 const IMMICH_API_KEY = process.env.IMMICH_API_KEY;
 const IMMICH_BASE_URL = process.env.IMMICH_BASE_URL;
 const IMMICH_ALBUM_ID = process.env.IMMICH_ALBUM_ID;
+
+function readOptionalDateEnv(name) {
+  const value = process.env[name]?.trim();
+  if (!value) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(value))) {
+    throw new Error(`${name} must be a YYYY-MM-DD date, got "${value}"`);
+  }
+  return value;
+}
+
+// Opt-in: only advance images on workdays (weekends repeat Friday) starting at
+// WORKDAYS_ONLY_SINCE, replaying weekend images since WEEKEND_CATCHUP_FROM first.
+const WORKDAYS_ONLY_SINCE = readOptionalDateEnv('WORKDAYS_ONLY_SINCE');
+const WEEKEND_CATCHUP_FROM = readOptionalDateEnv('WEEKEND_CATCHUP_FROM') || WORKDAYS_ONLY_SINCE;
 
 const PORT = process.env.PORT || 3000;
 
@@ -232,7 +246,9 @@ async function getSeededAssetIdFromAlbum(albumId, seedStr) {
     throw new Error('Album has no assets or response format unexpected');
   }
 
-  const chosen = selectImageForDate(assets, seedStr);
+  const chosen = WORKDAYS_ONLY_SINCE
+    ? selectWorkdayImageForDate(assets, seedStr, { since: WORKDAYS_ONLY_SINCE, catchUpFrom: WEEKEND_CATCHUP_FROM })
+    : selectImageForDate(assets, seedStr);
   if (!chosen) {
     throw new Error(`Album has no assets available on ${seedStr}`);
   }

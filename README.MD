@@ -24,6 +24,8 @@ A minimal Node.js Express server that fetches a random image from an Immich albu
   - `IMMICH_API_KEY` – Immich API key
   - `IMMICH_ALBUM_ID` – Album ID to sample from
   - `APP_ACCESS_TOKEN` (optional) – if set, requests must include `token=...` matching this value
+  - `WORKDAYS_ONLY_SINCE` (optional, `YYYY-MM-DD`) – from this date on, new images are only shown on workdays (Mon–Fri); Saturday and Sunday repeat Friday's image. Used by [teamsbg-by-vincent](https://github.com/mahn-ke/teamsbg-by-vincent).
+  - `WEEKEND_CATCHUP_FROM` (optional, `YYYY-MM-DD`, requires `WORKDAYS_ONLY_SINCE`) – the weekend images assigned between this date and `WORKDAYS_ONLY_SINCE` are replayed first, one per workday. After that the schedule continues where it stood on `WORKDAYS_ONLY_SINCE` and advances on workdays only, until it reaches a cumulative full shuffle; from then on the real date is used again.
 
 ### API Key Permissions
 

@@ -180,13 +180,20 @@ function getBatches(images) {
   return schedule;
 }
 
-export function selectImageForDate(allImages, requestDate) {
+function getActivePhase(allImages, requestDate) {
   const availableImages = getAvailableImages(allImages, requestDate);
   if (availableImages.length === 0) return null;
 
   const requestedDate = dateString(requestDate);
-  const batches = getBatches(availableImages);
-  const activePhase = batches.findLast((batch) => batch.startDate <= requestedDate);
+  const activePhase = getBatches(availableImages).findLast((batch) => batch.startDate <= requestedDate);
+  return { activePhase, requestedDate };
+}
+
+export function selectImageForDate(allImages, requestDate) {
+  const phase = getActivePhase(allImages, requestDate);
+  if (!phase) return null;
+
+  const { activePhase, requestedDate } = phase;
   const dayOffset = daysBetween(activePhase.startDate, requestedDate);
   if (activePhase.type === 'introduction') {
     return activePhase.images[dayOffset % activePhase.images.length];
@@ -199,4 +206,140 @@ export function selectImageForDate(allImages, requestDate) {
     `${activePhase.startDate}:${cycleIndex}`
   );
   return cycleImages[cycleOffset];
+}
+
+// --- Workday-only mode (opt-in, see README) ---------------------------------
+// Weekends show Friday's image. Weekend images assigned between `catchUpFrom`
+// and `since` (which nobody saw) are replayed first, one per workday. After
+// that the schedule resumes where it stood on `since` and advances only on
+// workdays ("virtual date") until it reaches a cumulative full-shuffle phase;
+// from then on the real date is used again.
+// TODO: Once the switch back to the real date has happened, remove the
+// catch-up queue and the virtual timeline and keep only the weekend → Friday
+// mapping.
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const END_OF_DAY_MS = DAY_MS - 1;
+const workdayCaches = new Map();
+
+function dayStartMs(value) {
+  return Date.parse(dateString(value));
+}
+
+function msToDateString(ms) {
+  return new Date(ms).toISOString().split('T')[0];
+}
+
+function isWeekend(dayMs) {
+  const weekday = new Date(dayMs).getUTCDay();
+  return weekday === 0 || weekday === 6;
+}
+
+function previousFridayMs(dayMs) {
+  const weekday = new Date(dayMs).getUTCDay();
+  return dayMs - ((weekday + 2) % 7) * DAY_MS;
+}
+
+// Number of Mon–Fri days in [startMs, endMs).
+function countWorkdays(startMs, endMs) {
+  if (endMs <= startMs) return 0;
+  const days = Math.round((endMs - startMs) / DAY_MS);
+  let count = Math.floor(days / 7) * 5;
+  for (let index = Math.floor(days / 7) * 7; index < days; index += 1) {
+    if (!isWeekend(startMs + index * DAY_MS)) count += 1;
+  }
+  return count;
+}
+
+function imagesSignature(images) {
+  return images
+    .map((image) => `${image.id}@${image.fileCreatedAt}`)
+    .sort()
+    .join('|');
+}
+
+function getWorkdayCache(allImages, sinceMs, catchUpFromMs) {
+  const key = `${sinceMs}:${catchUpFromMs}:${imagesSignature(allImages)}`;
+  let cache = workdayCaches.get(key);
+  if (cache) return cache;
+
+  const queue = [];
+  for (let dayMs = catchUpFromMs; dayMs < sinceMs; dayMs += DAY_MS) {
+    if (!isWeekend(dayMs)) continue;
+    const selected = selectImageForDate(allImages, msToDateString(dayMs));
+    if (selected) queue.push(selected);
+  }
+  const catchUpLength = queue.length;
+
+  const toVirtualMs = (instantMs) => {
+    const createdDayMs = dayStartMs(instantMs);
+    if (createdDayMs < sinceMs) return instantMs;
+
+    let baseDayMs = createdDayMs;
+    let timeOfDayMs = instantMs - createdDayMs;
+    if (isWeekend(createdDayMs)) {
+      baseDayMs = previousFridayMs(createdDayMs);
+      timeOfDayMs = END_OF_DAY_MS;
+      if (baseDayMs < sinceMs) return baseDayMs + timeOfDayMs;
+    }
+
+    const workdayIndex = countWorkdays(sinceMs, baseDayMs);
+    if (workdayIndex < catchUpLength) return sinceMs - DAY_MS + END_OF_DAY_MS;
+    return sinceMs + (workdayIndex - catchUpLength) * DAY_MS + timeOfDayMs;
+  };
+
+  const virtualImages = allImages.map((image) => ({
+    ...image,
+    fileCreatedAt: new Date(toVirtualMs(Date.parse(image.fileCreatedAt))).toISOString()
+  }));
+
+  cache = { queue, catchUpLength, virtualImages, switchIndex: null, checkedUntil: catchUpLength };
+  workdayCaches.clear();
+  workdayCaches.set(key, cache);
+  return cache;
+}
+
+function virtualDateForIndex(sinceMs, cache, workdayIndex) {
+  return msToDateString(sinceMs + (workdayIndex - cache.catchUpLength) * DAY_MS);
+}
+
+// First workday index after the catch-up at which the virtual schedule is in a
+// cumulative phase. Each check only sees images available on that day, so later
+// uploads cannot move an already reached switch point.
+function hasSwitchedToRealDate(sinceMs, cache, workdayIndex) {
+  if (cache.switchIndex !== null) return workdayIndex >= cache.switchIndex;
+
+  for (let index = cache.checkedUntil; index <= workdayIndex; index += 1) {
+    const phase = getActivePhase(cache.virtualImages, virtualDateForIndex(sinceMs, cache, index));
+    if (phase?.activePhase.type === 'cumulative') {
+      cache.switchIndex = index;
+      return true;
+    }
+    cache.checkedUntil = index + 1;
+  }
+  return false;
+}
+
+export function selectWorkdayImageForDate(allImages, requestDate, { since, catchUpFrom = since }) {
+  const sinceMs = Date.parse(since);
+  const catchUpFromMs = Date.parse(catchUpFrom);
+  let requestedDayMs = dayStartMs(requestDate);
+
+  if (requestedDayMs < sinceMs) return selectImageForDate(allImages, msToDateString(requestedDayMs));
+  if (isWeekend(requestedDayMs)) requestedDayMs = previousFridayMs(requestedDayMs);
+  if (requestedDayMs < sinceMs) return selectImageForDate(allImages, msToDateString(requestedDayMs));
+
+  const cache = getWorkdayCache(allImages, sinceMs, catchUpFromMs);
+  const workdayIndex = countWorkdays(sinceMs, requestedDayMs);
+  if (workdayIndex < cache.catchUpLength) return cache.queue[workdayIndex];
+
+  if (hasSwitchedToRealDate(sinceMs, cache, workdayIndex)) {
+    return selectImageForDate(allImages, msToDateString(requestedDayMs));
+  }
+
+  const selected = selectImageForDate(
+    cache.virtualImages,
+    virtualDateForIndex(sinceMs, cache, workdayIndex)
+  );
+  return selected && allImages.find((image) => image.id === selected.id);
 }

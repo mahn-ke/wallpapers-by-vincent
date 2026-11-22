@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getAvailableImages, selectImageForDate } from '../utils/imageSelector.js';
+import { getAvailableImages, selectImageForDate, selectWorkdayImageForDate } from '../utils/imageSelector.js';
 
 function image(id, fileCreatedAt) {
   return { id, fileCreatedAt };
@@ -235,4 +235,110 @@ test('cumulative run limit relaxes only as much as a dominant batch requires', (
     longestRun = Math.max(longestRun, currentRun);
   }
   assert.equal(longestRun, 3);
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+const day = (date, offset = 0) => new Date(Date.parse(date) + offset * DAY).toISOString().split('T')[0];
+const isWeekendDay = (date) => [0, 6].includes(new Date(date).getUTCDay());
+const daysFrom = (start, count) => Array.from({ length: count }, (_, offset) => day(start, offset));
+const workdaysFrom = (start, count) => {
+  const result = [];
+  for (let offset = 0; result.length < count; offset += 1) {
+    if (!isWeekendDay(day(start, offset))) result.push(day(start, offset));
+  }
+  return result;
+};
+
+// a: 6 images on Wed 2025-01-01; b: 8 images on Mon 2025-01-20, whose
+// introduction is still running on Mon 2025-01-27.
+const workdayAlbum = [
+  ...Array.from({ length: 6 }, (_, index) => image(`a_${index}`, '2025-01-01T00:00:00Z')),
+  ...Array.from({ length: 8 }, (_, index) => image(`b_${index}`, '2025-01-20T00:00:00Z'))
+];
+const workdayConfig = { since: '2025-01-27', catchUpFrom: '2025-01-01' };
+const missedWeekends = daysFrom('2025-01-01', 26).filter(isWeekendDay);
+const selectWorkday = (images, date, config = workdayConfig) =>
+  selectWorkdayImageForDate(images, date, config)?.id;
+
+test('workday mode leaves dates before `since` untouched', () => {
+  for (const date of daysFrom('2025-01-01', 26)) {
+    assert.equal(selectWorkday(workdayAlbum, date), selectImageForDate(workdayAlbum, date).id);
+  }
+});
+
+test('workday mode shows Friday\'s image on weekends', () => {
+  for (const friday of ['2025-01-31', '2025-02-07', '2025-02-21', '2025-06-06']) {
+    const expected = selectWorkday(workdayAlbum, friday);
+    assert.equal(selectWorkday(workdayAlbum, day(friday, 1)), expected);
+    assert.equal(selectWorkday(workdayAlbum, day(friday, 2)), expected);
+  }
+});
+
+test('missed weekend images are replayed first, then the schedule resumes at `since` on workdays', () => {
+  const workdays = workdaysFrom('2025-01-27', missedWeekends.length + 6);
+  const shown = workdays.map((date) => selectWorkday(workdayAlbum, date));
+
+  assert.equal(missedWeekends.length, 8);
+  assert.deepEqual(
+    shown.slice(0, missedWeekends.length),
+    missedWeekends.map((date) => selectImageForDate(workdayAlbum, date).id)
+  );
+  // The introduction of batch b continues where it stood, one virtual day per workday.
+  assert.deepEqual(
+    shown.slice(missedWeekends.length),
+    daysFrom('2025-01-27', 6).map((date) => selectImageForDate(workdayAlbum, date).id)
+  );
+  // Every image of the new batch gets shown once (weekend part via the catch-up).
+  const introduced = shown.filter((id) => id.startsWith('b_'));
+  assert.equal(new Set(introduced).size, 8);
+});
+
+test('workday mode switches back to the real date once the schedule is cumulative', () => {
+  const afterCatchUp = workdaysFrom('2025-01-27', missedWeekends.length + 40).slice(missedWeekends.length);
+  const switchIndex = afterCatchUp.findIndex((date, index) =>
+    index > 0 && selectWorkday(workdayAlbum, date) === selectImageForDate(workdayAlbum, date).id &&
+    afterCatchUp.slice(index).every((later) =>
+      selectWorkday(workdayAlbum, later) === selectImageForDate(workdayAlbum, later).id)
+  );
+  // Virtual dates until 2025-02-01 (the end of b's introduction), real dates afterwards.
+  assert.equal(switchIndex, 6);
+  assert.equal(afterCatchUp[switchIndex], '2025-02-14');
+});
+
+test('workday mode switches right after the catch-up when already cumulative on `since`', () => {
+  const config = { since: '2025-03-03', catchUpFrom: '2025-01-01' };
+  const weekends = daysFrom('2025-01-01', 61).filter(isWeekendDay);
+  const workdays = workdaysFrom('2025-03-03', weekends.length + 10);
+  assert.deepEqual(
+    workdays.slice(0, weekends.length).map((date) => selectWorkday(workdayAlbum, date, config)),
+    weekends.map((date) => selectImageForDate(workdayAlbum, date).id)
+  );
+  for (const date of workdays.slice(weekends.length)) {
+    assert.equal(selectWorkday(workdayAlbum, date, config), selectImageForDate(workdayAlbum, date).id);
+  }
+});
+
+test('uploads during the catch-up are introduced right after it', () => {
+  const upload = [image('c_0', '2025-01-29T10:00:00Z'), image('c_1', '2025-01-29T10:00:00Z')];
+  const images = [...workdayAlbum, ...upload];
+  const workdays = workdaysFrom('2025-01-27', missedWeekends.length + 20);
+
+  assert.deepEqual(
+    workdays.slice(0, missedWeekends.length).map((date) => selectWorkday(images, date)),
+    workdays.slice(0, missedWeekends.length).map((date) => selectWorkday(workdayAlbum, date))
+  );
+  const afterCatchUp = workdays.slice(missedWeekends.length).map((date) => selectWorkday(images, date));
+  assert.ok(afterCatchUp.includes('c_0'));
+  assert.ok(afterCatchUp.includes('c_1'));
+});
+
+test('uploads after the switch appear the next workday and do not change earlier dates', () => {
+  const before = workdaysFrom('2025-01-27', 40).map((date) => selectWorkday(workdayAlbum, date));
+  const upload = [image('late_0', '2025-04-02T09:00:00Z')];
+  const images = [...workdayAlbum, ...upload];
+  const workdays = workdaysFrom('2025-01-27', 60);
+
+  assert.deepEqual(workdays.slice(0, 40).map((date) => selectWorkday(images, date)), before);
+  assert.equal(selectWorkday(images, '2025-04-03'), selectImageForDate(images, '2025-04-03').id);
+  assert.ok(new Date(selectWorkdayImageForDate(images, '2025-04-03', workdayConfig).fileCreatedAt) <= new Date('2025-04-03'));
 });
